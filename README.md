@@ -21,10 +21,21 @@ A small cli converter that converts input to binary literals
 \x39\x05
 ```
 
-### ReadMe
+### ReadMe:
 | Subcommand |  Full command    | Comment |  
 |---|---------------------------|---------|
 |-h | --help                    | Display this help and exit.
 |-v | --version                 | Output version information and exit.
 |   | [\<str\>\|\<hex\>\|\<dec\>\\|\<bin\>\] | The input to be converted.
 
+### Installation:
+```sh
+git clone https://github.com/SoraTenshi/zconv \
+cd zconv \
+git submodule init \
+git submodule update --recursive \
+zig build \
+
+# And then run with
+./zig-out/bin/zconv
+```
