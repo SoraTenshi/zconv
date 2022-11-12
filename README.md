@@ -20,3 +20,10 @@ A small cli converter that converts input to binary literals
 ❯❯ ./zconv 1337
 \x39\x05
 ```
+
+### Readme
+```
+-h, --help                    Display this help and exit.
+-v, --version                 Output version information and exit.
+    [<str>|<hex>|<dec>|<bin>] The input to be converted.
+```
