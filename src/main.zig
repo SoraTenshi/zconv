@@ -4,16 +4,65 @@ const io = std.io;
 const mem = std.mem;
 const format = std.fmt.comptimePrint;
 
-const DataType = enum {
-    dec,
-    hex,
-    bin,
-    str,
-};
+fn trimSize(allocator: std.mem.Allocator, data: []u8) ![]u8 {
+    var zero_counter: usize = 0;
+    var index = data.len - 1;
+    while (index != 0) : (index -= 1) {
+        if (data[index] == '0') {
+            zero_counter += 1;
+        } else if (zero_counter > 1 and data[index] != 'x') {
+            zero_counter = 0;
+        } else if (data[index] == 'x' and zero_counter > 1) {
+            index -= 1;
+            break;
+        }
+    }
+
+    return allocator.realloc(data, index);
+}
+
+fn removeZeroes(allocator: std.mem.Allocator, data: []u8) ![]u8 {
+    var len: usize = data.len - 1;
+    while (len != 0) : (len -= 1) {
+        if (data[len] == '0') {
+            break;
+        }
+    }
+
+    return try allocator.realloc(data, len);
+}
+
+fn formatStringToHex(allocator: std.mem.Allocator, data: []const u8) ![]const u8 {
+    const as_int: ?usize = std.fmt.parseUnsigned(usize, data, 0) catch null;
+
+    if (as_int) |int| {
+        const new_str = try std.fmt.allocPrint(allocator, "{s}", .{std.mem.toBytes(int)});
+        defer allocator.free(new_str);
+        const this = try std.fmt.allocPrint(allocator, "{d}", .{std.fmt.fmtSliceHexUpper(new_str)});
+        std.debug.print("this: {s} : {s}\n", .{ this, new_str });
+        return try removeZeroes(allocator, this);
+    } else {
+        const this = try std.fmt.allocPrint(allocator, "{s}", .{std.fmt.fmtSliceHexUpper(data)});
+        std.debug.print("in string {s}\n", .{this});
+        return this;
+    }
+}
 
 const ParsedValue = struct {
+    const Self = @This();
     value: []const u8,
-    type: DataType,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, data: []const u8) !Self {
+        return Self{
+            .value = try formatStringToHex(allocator, data),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.allocator.free(self.value);
+    }
 };
 
 const BytePair = struct {
@@ -32,32 +81,7 @@ fn getValues(alloc: mem.Allocator, values: ?[]const u8) ![]ParsedValue {
 
     var i: usize = 0;
     while (tokens.next()) |token| {
-        const firstByte = token[0];
-        if (firstByte == '\'') {
-            results[i] = ParsedValue{
-                .value = token[1..],
-                .type = DataType.str,
-            };
-            continue;
-        }
-        const firstTwoBytes = token[0..];
-        if (mem.eql(u8, firstTwoBytes, "0x")) {
-            results[i] = ParsedValue{
-                .value = token[2..],
-                .type = DataType.hex,
-            };
-        } else if (mem.eql(u8, firstTwoBytes, "0b")) {
-            results[i] = ParsedValue{
-                .value = token[2..],
-                .type = DataType.bin,
-            };
-        } else {
-            results[i] = ParsedValue{
-                .value = token,
-                .type = DataType.dec,
-            };
-        }
-        i += 1;
+        results[i] = try ParsedValue.init(alloc, token);
     }
     return results[0..];
 }
@@ -83,13 +107,14 @@ fn toLittleEndian(allocator: mem.Allocator, data: ParsedValue) ![]const u8 {
         current_pair.right = if (index + 1 < data.value.len) upper(data.value[index + 1]) else null;
     }
 
-    mem.reverse(BytePair, byte_pairs);
     const as_little_endian = try allocator.alloc(u8, (byte_pairs.len * 4));
     index = 0;
     for (byte_pairs) |*pair| {
+        if (pair.left == '0' and pair.right orelse '1' == '0') {
+            continue;
+        }
         if (pair.right == null) {
             pair.right = '0';
-            mem.swap(u8, &(pair.right.?), &pair.left);
         }
 
         mem.copy(u8, as_little_endian[index..], "\\x");
@@ -97,28 +122,32 @@ fn toLittleEndian(allocator: mem.Allocator, data: ParsedValue) ![]const u8 {
         as_little_endian[index + 3] = pair.right.?;
         index += 4;
     }
-
-    return as_little_endian;
+    return allocator.realloc(as_little_endian, byte_pairs.len * 4);
 }
 
 fn convert(allocator: mem.Allocator, values: []ParsedValue) ![]const u8 {
     var required_bytes: usize = 0;
-    for (values) |value| {
+    for (values) |value, i| {
         const len = value.value.len;
-        required_bytes = len * 2;
+        required_bytes = len * 2 + (@boolToInt(i > 0) * 1);
     }
 
     var converted = try allocator.alloc(u8, required_bytes + (required_bytes % 4));
     var last: usize = 0;
-    for (values) |value| {
+    for (values) |value, i| {
         const this = try toLittleEndian(allocator, value);
+        std.debug.print("this: {s}\n", .{this});
         defer allocator.free(this);
 
         mem.copy(u8, converted[last..], this);
-        last += value.value.len + 2;
+        if (i + 1 < values.len) {
+            last += this.len - 1;
+            converted[last] = ' ';
+            last += 1;
+        }
     }
 
-    return converted;
+    return try trimSize(allocator, converted);
 }
 
 pub fn main() !void {
@@ -172,11 +201,10 @@ pub fn main() !void {
             'v' => try stdout.writeAll(format("Version is currently: {s}\n", .{"0.0.0a"})),
             'x' => {
                 const parsed_values = try getValues(alloc, arg.value.?);
-                defer alloc.free(parsed_values);
+                defer for (parsed_values) |*elem| elem.deinit();
 
-                const converted_val = try convert(alloc, parsed_values);
-                defer alloc.free(converted_val);
-                try stdout.writeAll(converted_val);
+                const converted = try convert(alloc, parsed_values);
+                try stdout.writeAll(converted);
             },
             else => unreachable,
         }
