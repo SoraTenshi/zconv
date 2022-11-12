@@ -39,11 +39,9 @@ fn formatStringToHex(allocator: std.mem.Allocator, data: []const u8) ![]const u8
         const new_str = try std.fmt.allocPrint(allocator, "{s}", .{std.mem.toBytes(int)});
         defer allocator.free(new_str);
         const this = try std.fmt.allocPrint(allocator, "{d}", .{std.fmt.fmtSliceHexUpper(new_str)});
-        std.debug.print("this: {s} : {s}\n", .{ this, new_str });
         return try removeZeroes(allocator, this);
     } else {
         const this = try std.fmt.allocPrint(allocator, "{s}", .{std.fmt.fmtSliceHexUpper(data)});
-        std.debug.print("in string {s}\n", .{this});
         return this;
     }
 }
@@ -136,7 +134,6 @@ fn convert(allocator: mem.Allocator, values: []ParsedValue) ![]const u8 {
     var last: usize = 0;
     for (values) |value, i| {
         const this = try toLittleEndian(allocator, value);
-        std.debug.print("this: {s}\n", .{this});
         defer allocator.free(this);
 
         mem.copy(u8, converted[last..], this);
