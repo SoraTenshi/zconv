@@ -16,4 +16,7 @@ A small cli converter that converts input to binary literals
 
 ❯❯ ./zconv 0o1337
 \xDF\x02
+
+❯❯ ./zconv 1337
+\x39\x05
 ```
