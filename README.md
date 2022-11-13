@@ -19,6 +19,9 @@ A small cli converter that converts input to binary literals
 
 ❯❯ ./zconv 1337
 \x39\x05
+
+❯❯ ./zconv asdf
+\x61\x73\x64\x66
 ```
 
 ### ReadMe:
