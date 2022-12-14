@@ -24,12 +24,14 @@
         src = self;
         nativeBuildInputs = with pkgs; [
           zig
+          git
         ];
+        configurePhase = ''
+          ${pkgs.git} submodule init
+          ${pkgs.git} submodule update --recursive
+        '';
         buildPhase = ''
           ${pkgs.zig} build -Drelease-safe=true
-        '';
-        installPhase = ''
-          cp ./zig-out/bin/zconv $out
         '';
       };
       
