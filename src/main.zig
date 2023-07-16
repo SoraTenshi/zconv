@@ -1,10 +1,13 @@
 const std = @import("std");
 const clap = @import("clap");
+
 const io = std.io;
 const mem = std.mem;
 const format = std.fmt.comptimePrint;
 
-fn trimSize(allocator: std.mem.Allocator, data: []u8) ![]u8 {
+const Allocator = mem.Allocator;
+
+fn trimSize(allocator: Allocator, data: []u8) ![]u8 {
     var zero_counter: usize = 0;
     var index = data.len - 1;
     while (index != 0) : (index -= 1) {
@@ -25,7 +28,7 @@ fn trimSize(allocator: std.mem.Allocator, data: []u8) ![]u8 {
     }
 }
 
-fn removeZeroes(allocator: std.mem.Allocator, data: []u8) ![]u8 {
+fn removeZeroes(allocator: Allocator, data: []u8) ![]u8 {
     var len: usize = data.len - 1;
     while (len != 0) : (len -= 1) {
         if (data[len] == '0') {
@@ -36,11 +39,11 @@ fn removeZeroes(allocator: std.mem.Allocator, data: []u8) ![]u8 {
     return try allocator.realloc(data, len);
 }
 
-fn formatStringToHex(allocator: std.mem.Allocator, data: []const u8) ![]const u8 {
+fn formatStringToHex(allocator: Allocator, data: []const u8) ![]const u8 {
     const as_int: ?usize = std.fmt.parseUnsigned(usize, data, 0) catch null;
 
     if (as_int) |int| {
-        const new_str = try std.fmt.allocPrint(allocator, "{s}", .{std.mem.toBytes(int)});
+        const new_str = try std.fmt.allocPrint(allocator, "{s}", .{mem.toBytes(int)});
         defer allocator.free(new_str);
         const this = try std.fmt.allocPrint(allocator, "{d}", .{std.fmt.fmtSliceHexUpper(new_str)});
         return try removeZeroes(allocator, this);
@@ -53,9 +56,9 @@ fn formatStringToHex(allocator: std.mem.Allocator, data: []const u8) ![]const u8
 const ParsedValue = struct {
     const Self = @This();
     value: []const u8,
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, data: []const u8) !Self {
+    pub fn init(allocator: Allocator, data: []const u8) !Self {
         return Self{
             .value = try formatStringToHex(allocator, data),
             .allocator = allocator,
@@ -72,14 +75,14 @@ const BytePair = struct {
     right: ?u8 = null,
 };
 
-fn getValues(alloc: mem.Allocator, values: ?[]const u8) !ParsedValue {
+fn getValues(alloc: Allocator, values: ?[]const u8) !ParsedValue {
     if (values == null) {
         return error.NoValues;
     }
     return try ParsedValue.init(alloc, values.?);
 }
 
-fn toLittleEndian(allocator: mem.Allocator, data: ParsedValue) ![]u8 {
+fn toLittleEndian(allocator: Allocator, data: ParsedValue) ![]u8 {
     if (data.value.len < 1) {
         return error.NoData;
     }
@@ -118,9 +121,17 @@ fn toLittleEndian(allocator: mem.Allocator, data: ParsedValue) ![]u8 {
     return allocator.realloc(as_little_endian, byte_pairs.len * 4);
 }
 
-fn convert(allocator: mem.Allocator, value: ParsedValue) ![]const u8 {
+fn convert(allocator: Allocator, value: ParsedValue) ![]u8 {
     const this = try toLittleEndian(allocator, value);
-    return try trimSize(allocator, this);
+    return trimSize(allocator, this);
+}
+
+fn addPad(allocator: Allocator, buffer: []u8, size: usize) ![]u8 {
+    defer allocator.free(buffer);
+    var new = try allocator.alloc(u8, buffer.len + 4 * size);
+    mem.copyForwards(u8, new[0..(buffer.len)], buffer);
+    mem.copyForwards(u8, new[buffer.len..], "\\x00");
+    return new;
 }
 
 pub fn main() !void {
@@ -131,7 +142,9 @@ pub fn main() !void {
     const param_list =
         \\-h, --help                    Display this help and exit.
         \\-v, --version                 Output version information and exit.
-        \\    [<str>|<hex>|<dec>|<bin>] The input to be converted.
+        \\-p, --padding                 The padding of \x00 before the conversion bytes.
+        \\-b, --base                    The length of the cyclic "base" pattern.
+        \\    [<str>|<hex>|<dec>|<bin>] The input to be converted, radix is decided on prefix.
         \\
     ;
 
@@ -143,6 +156,14 @@ pub fn main() !void {
         .{
             .id = 'v',
             .names = .{ .short = 'v', .long = "version" },
+        },
+        .{
+            .id = 'p',
+            .names = .{ .short = 'p', .long = "padding" },
+        },
+        .{
+            .id = 'b',
+            .names = .{ .short = 'b', .long = "base" },
         },
         .{
             .id = 'x',
@@ -164,6 +185,10 @@ pub fn main() !void {
     };
 
     const stdout = std.io.getStdOut().writer();
+    var went_through = false;
+    var padding: usize = 0;
+    var cyclic: usize = 0;
+    var res: []u8 = undefined;
     defer stdout.writeAll("\n") catch {};
     while (parser.next() catch |err| {
         diag.report(io.getStdErr().writer(), err) catch {};
@@ -171,16 +196,34 @@ pub fn main() !void {
     }) |arg| {
         switch (arg.param.id) {
             'h' => try stdout.writeAll(param_list),
-            'v' => try stdout.writeAll(format("Version is currently: {s}\n", .{"0.0.0a"})),
+            'v' => try stdout.print("Version is currently: {s}\n", .{"0.0.2"}), // cba with versioning just yet...
+            'p' => {
+                if (padding != 0) {
+                    std.log.err("Please put the conversion value at last.", .{});
+                    std.os.exit(1);
+                }
+                std.debug.print("Reached padding: {}", .{went_through});
+                padding = try std.fmt.parseUnsigned(usize, arg.value.?, 0);
+                continue;
+            },
+            'b' => {
+                if (cyclic != 0) {
+                    std.log.err("Please put the conversion value at last.", .{});
+                    std.os.exit(1);
+                }
+                std.debug.print("Reached cyclic: {}", .{cyclic});
+                cyclic = try std.fmt.parseUnsigned(usize, arg.value.?, 0);
+                continue;
+            },
             'x' => {
                 var parsed_value = try getValues(alloc, arg.value.?);
                 defer parsed_value.deinit();
 
                 const converted = try convert(alloc, parsed_value);
-                try stdout.writeAll(converted);
-                try stdout.writeAll("\n");
+                res = converted;
             },
             else => unreachable,
         }
+        try stdout.print("{s}\n", .{res});
     }
 }
