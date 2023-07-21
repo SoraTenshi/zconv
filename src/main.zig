@@ -7,6 +7,8 @@ const format = std.fmt.comptimePrint;
 
 const Allocator = mem.Allocator;
 
+var pad_style = "\\x00";
+
 fn trimSize(allocator: Allocator, data: []u8) ![]u8 {
     var zero_counter: usize = 0;
     var index = data.len - 1;
@@ -130,7 +132,7 @@ fn addPad(allocator: Allocator, buffer: []u8, size: usize) ![]u8 {
     defer allocator.free(buffer);
     var new = try allocator.alloc(u8, buffer.len + 4 * size);
     mem.copyForwards(u8, new[0..(buffer.len)], buffer);
-    mem.copyForwards(u8, new[buffer.len..], "\\x00");
+    mem.copyForwards(u8, new[buffer.len..], pad_style);
     return new;
 }
 
@@ -145,7 +147,6 @@ pub fn main() !void {
         \\-p, --padding                 The padding of \x00 before the conversion bytes.
         \\-b, --base                    The length of the cyclic "base" pattern.
         \\    [<str>|<hex>|<dec>|<bin>] The input to be converted, radix is decided on prefix.
-        \\
     ;
 
     const params = [_]clap.Param(u8){
@@ -156,6 +157,10 @@ pub fn main() !void {
         .{
             .id = 'v',
             .names = .{ .short = 'v', .long = "version" },
+        },
+        .{
+            .id = 'n',
+            .names = .{ .short = 'n', .long = "use_nop" },
         },
         .{
             .id = 'p',
@@ -195,7 +200,10 @@ pub fn main() !void {
         return err;
     }) |arg| {
         switch (arg.param.id) {
-            'h' => try stdout.writeAll(param_list),
+            'h' => {
+                try stdout.print("{s}\n", .{param_list});
+                std.os.exit(0);
+            },
             'v' => try stdout.print("Version is currently: {s}\n", .{"0.0.2"}), // cba with versioning just yet...
             'p' => {
                 if (padding != 0) {
@@ -215,15 +223,22 @@ pub fn main() !void {
                 cyclic = try std.fmt.parseUnsigned(usize, arg.value.?, 0);
                 continue;
             },
+            'n' => {
+                std.debug.print("Reached style: {}", .{cyclic});
+                pad_style = if (mem.eql(u8, pad_style, arg.value.?)) pad_style else "\\x90";
+                continue;
+            },
             'x' => {
                 var parsed_value = try getValues(alloc, arg.value.?);
                 defer parsed_value.deinit();
 
                 const converted = try convert(alloc, parsed_value);
                 res = converted;
+                continue;
             },
             else => unreachable,
         }
+
         try stdout.print("{s}\n", .{res});
     }
 }
